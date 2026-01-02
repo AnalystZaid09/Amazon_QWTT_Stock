@@ -25,7 +25,7 @@ with col3:
     pm_file = st.file_uploader("Upload Product Master Excel", type=['xlsx', 'xls'], key='pm')
     
 with col4:
-    st.subheader("📁 QWTT Seller Flex Order")
+    st.subheader("📁QWTT Sellerflex Order")
     qwtt_file = st.file_uploader(
         "Upload QWTT Seller Flex CSV",
         type=['csv'],
@@ -426,3 +426,4 @@ st.markdown(
     "💡 **Tip**: Make sure your files have the correct column names: "
     "`Asin`, `Sellable` in Inventory, and matching ASIN columns in all files."
 )
+
