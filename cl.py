@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+import openpyxl
 
 st.set_page_config(page_title="Amazon QWTT Stock Report", layout="wide")
 
@@ -24,7 +25,7 @@ with col3:
     pm_file = st.file_uploader("Upload Product Master Excel", type=['xlsx', 'xls'], key='pm')
     
 with col4:
-    st.subheader("📁 QWTT Seller Flex")
+    st.subheader("📁 QWTT Seller Flex Order")
     qwtt_file = st.file_uploader(
         "Upload QWTT Seller Flex CSV",
         type=['csv'],
@@ -352,15 +353,31 @@ if 'result' in st.session_state:
             },
         )
 
-        csv1 = result.to_csv(index=False).encode("utf-8")
+        # Create Excel in memory
+        output1 = io.BytesIO()
+        with pd.ExcelWriter(output1, engine='openpyxl') as writer:
+            result.to_excel(writer, index=False, sheet_name="Stock Report")
+        output1.seek(0)
+
+        # Download button for Excel
         st.download_button(
-            label="📥 Download Inventory / Stock Report",
-            data=csv1,
-            file_name="inventory_stock_report.csv",
-            mime="text/csv",
+            label="📥 Download Inventory / Stock Report (Excel)",
+            data=output1,
+            file_name="inventory_stock_report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary",
             use_container_width=True,
         )
+
+        # csv1 = result.to_csv(index=False).encode("utf-8")
+        # st.download_button(
+        #     label="📥 Download Inventory / Stock Report",
+        #     data=csv1,
+        #     file_name="inventory_stock_report.csv",
+        #     mime="text/csv",
+        #     type="primary",
+        #     use_container_width=True,
+        # )
 
     # =========================
     # TAB 2: QWTT SALES REPORT
@@ -375,16 +392,33 @@ if 'result' in st.session_state:
             use_container_width=True,
             height=500,
         )
+        
+        # Create Excel in memory
+        output2 = io.BytesIO()
+        with pd.ExcelWriter(output2, engine='openpyxl') as writer:
+            qwtt_sales_report.to_excel(writer, index=False, sheet_name="QWTT Sales")
+        output2.seek(0)
 
-        csv2 = qwtt_sales_report.to_csv(index=False).encode("utf-8")
+        # Download button for Excel
         st.download_button(
-            label="📥 Download QWTT Sales Report",
-            data=csv2,
-            file_name="qwtt_sales_report.csv",
-            mime="text/csv",
+            label="📥 Download QWTT Sales Report (Excel)",
+            data=output2,
+            file_name="qwtt_sales_report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary",
             use_container_width=True,
         )
+
+
+        # csv2 = qwtt_sales_report.to_csv(index=False).encode("utf-8")
+        # st.download_button(
+        #     label="📥 Download QWTT Sales Report",
+        #     data=csv2,
+        #     file_name="qwtt_sales_report.csv",
+        #     mime="text/csv",
+        #     type="primary",
+        #     use_container_width=True,
+        # )
 
 # Footer (UNCHANGED)
 st.markdown("---")
@@ -392,4 +426,3 @@ st.markdown(
     "💡 **Tip**: Make sure your files have the correct column names: "
     "`Asin`, `Sellable` in Inventory, and matching ASIN columns in all files."
 )
-
