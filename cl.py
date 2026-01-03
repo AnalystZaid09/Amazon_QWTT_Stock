@@ -1,429 +1,236 @@
 import streamlit as st
 import pandas as pd
-import io
-import openpyxl
+from io import BytesIO
 
-st.set_page_config(page_title="Amazon QWTT Stock Report", layout="wide")
+st.set_page_config(page_title="QWTT Reports", layout="wide")
 
-# Title and description
-st.title("📊 Amazon QWTT Stock Report Generator")
-st.markdown("Upload your inventory, business report, and product master files to generate a consolidated report")
+st.title("📊 QWTT Inventory & Sales Report")
 
-# Create three columns for file uploads
-col1, col2, col3, col4 = st.columns(4)
+# File uploaders in sidebar
+st.sidebar.header("Upload Files")
+inventory_file = st.sidebar.file_uploader("Upload Inventory CSV", type=['csv'])
+pm_file = st.sidebar.file_uploader("Upload PM Excel", type=['xlsx'])
+sales_file = st.sidebar.file_uploader("Upload Sales CSV", type=['csv'])
 
-with col1:
-    st.subheader("📁 Inventory File")
-    inventory_file = st.file_uploader("Upload Inventory CSV", type=['csv'], key='inventory')
-
-with col2:
-    st.subheader("📁 Business Report")
-    business_file = st.file_uploader("Upload Business Report CSV", type=['csv'], key='business')
-
-with col3:
-    st.subheader("📁 Product Master")
-    pm_file = st.file_uploader("Upload Product Master Excel", type=['xlsx', 'xls'], key='pm')
+def process_data(inventory_df, pm_df, sales_df):
+    """Process the data and return inventory and sales reports"""
     
-with col4:
-    st.subheader("📁QWTT Sellerflex Order")
-    qwtt_file = st.file_uploader(
-        "Upload QWTT Seller Flex CSV",
-        type=['csv'],
-        key='qwtt'
+    # Process Inventory Report
+    inv_pivot = (
+        inventory_df
+        .pivot_table(index="Asin", values="Sellable", aggfunc="sum")
+        .reset_index()
+        .rename(columns={"Sellable": "Stock"})
     )
-
-# Process button
-if st.button("🔄 Generate Report", type="primary", use_container_width=True):
-    if not inventory_file or not business_file or not pm_file or not qwtt_file:
-        st.error("⚠️ Please upload Inventory, Business Report, Product Master, and QWTT Seller Flex files")
-    else:
-        try:
-            with st.spinner("Processing files..."):
-                # Read files
-                Inventory = pd.read_csv(inventory_file)
-                Business_Report = pd.read_csv(business_file)
-                PM = pd.read_excel(pm_file)
-                QWTT = pd.read_csv(qwtt_file)
-                
-                
-                # Normalize QWTT Status column
-                status_col = next((c for c in QWTT.columns if 'status' in c.lower()), None)
-
-                if status_col is None:
-                    st.error("❌ Status column not found in QWTT file")
-                    st.stop()
-
-                QWTT[status_col] = QWTT[status_col].astype(str).str.strip().str.lower()
-
-                # Remove cancelled and sidelined orders
-                QWTT = QWTT[~QWTT[status_col].isin(['cancelled', 'sidelined'])]
-                
-                # Detect Order Value column
-                order_value_col = next((c for c in QWTT.columns if 'order value' in c.lower()), None)
-
-                if order_value_col is None:
-                    st.error("❌ Order Value column not found in QWTT file")
-                    st.stop()
-
-                # Clean Order Value
-                QWTT[order_value_col] = (
-                    QWTT[order_value_col]
-                        .astype(str)
-                        .str.replace(r'[₹,$\s]', '', regex=True)
-                        .replace('', '0')
-                )
-
-                QWTT[order_value_col] = pd.to_numeric(
-                    QWTT[order_value_col], errors='coerce'
-                ).fillna(0)
-
-                # Remove zero-value orders
-                QWTT = QWTT[QWTT[order_value_col] > 0]
-                
-                # Detect ASIN column in QWTT
-                qwtt_asin_col = next((c for c in QWTT.columns if 'asin' in c.lower()), None)
-
-                # Detect Units column in QWTT
-                qwtt_units_col = next(
-                    (c for c in QWTT.columns if 'unit' in c.lower() or 'quantity' in c.lower()),
-                    None
-                )
-
-                if qwtt_asin_col is None or qwtt_units_col is None:
-                    st.error(
-                        f"❌ Couldn't detect ASIN or Units column in QWTT file "
-                        f"(ASIN={qwtt_asin_col}, Units={qwtt_units_col})"
-                    )
-                    st.stop()
-                    
-                # Clean Units column
-                QWTT[qwtt_units_col] = (
-                    QWTT[qwtt_units_col]
-                        .astype(str)
-                        .str.replace(r'[,\s]', '', regex=True)
-                        .replace('', '0')
-                )
-
-                QWTT[qwtt_units_col] = pd.to_numeric(
-                    QWTT[qwtt_units_col], errors='coerce'
-                ).fillna(0).astype(int)
-                
-                # QWTT Pivot Table (ASIN and Units)
-                qwtt_pivot = pd.pivot_table(
-                    QWTT,
-                    index=qwtt_asin_col,
-                    values=qwtt_units_col,
-                    aggfunc='sum',
-                    margins=True,
-                    margins_name='Grand Total'
-                )
-                
-                qwtt_pivot = qwtt_pivot.rename(columns={qwtt_units_col: 'QWTT Units'})
-
-                # Create pivot table from inventory
-                pivot_Inv = pd.pivot_table(
-                    Inventory,
-                    index="Asin",
-                    values="Sellable",
-                    aggfunc="sum",
-                    margins=True,
-                    margins_name="Grand Total"
-                )
-                 
-                # Find business report columns (case-insensitive)
-                biz_asin_col = next((c for c in Business_Report.columns if 'asin' in c.lower()), None)
-                biz_totitems_col = next((c for c in Business_Report.columns
-                                       if 'total order items' in c.lower() or 'order items' in c.lower()), None)
-
-                if biz_asin_col is None or biz_totitems_col is None:
-                    st.error(f"Couldn't detect required columns in Business Report. Found: ASIN={biz_asin_col}, Total Items={biz_totitems_col}")
-                    st.stop()
-
-                # Clean business report data
-                biz = Business_Report.copy()
-                biz[biz_totitems_col] = (
-                    biz[biz_totitems_col].astype(str)
-                       .str.replace(r'[,₹\$\s]', '', regex=True)
-                       .replace('', '0')
-                )
-                biz[biz_totitems_col] = pd.to_numeric(biz[biz_totitems_col], errors='coerce').fillna(0).astype(int)
-
-                # Create sales mapping
-                mapping = {str(k).strip(): int(v) for k, v in biz.set_index(biz_asin_col)[biz_totitems_col].to_dict().items()}
-
-                # Add sales quantity to pivot
-                pivot = pivot_Inv.copy()
-                pivot['Sales QTY'] = pivot.index.to_series().astype(str).str.strip().map(mapping).fillna(0).astype(int)
-
-                # Update Grand Total for Sales QTY
-                if "Grand Total" in pivot.index:
-                    pivot.at["Grand Total", "Sales QTY"] = int(pivot.loc[pivot.index != "Grand Total", "Sales QTY"].sum())
-
-                # Sort by Sales QTY
-                if "Grand Total" in pivot.index:
-                    grand_total_row = pivot.loc[["Grand Total"]]
-                    pivot_no_total = pivot.drop(index="Grand Total")
-                else:
-                    pivot_no_total = pivot
-
-                pivot_sorted = pivot_no_total.sort_values(by="Sales QTY", ascending=True)
-
-                # Add Grand Total back
-                if "Grand Total" in pivot_Inv.index:
-                    pivot_sorted = pd.concat([pivot_sorted, grand_total_row])
-
-                # Reset index to make Asin a column
-                pivot_sorted = pivot_sorted.reset_index()
-                pivot_sorted.rename(columns={"index": "Asin", "Sellable": "Stock"}, inplace=True)
-
-                # Find PM columns
-                pm_asin = next(c for c in PM.columns if "asin" in c.lower())
-                pm_manager = next(c for c in PM.columns if "manager" in c.lower())
-                pm_brand = next(c for c in PM.columns if c.lower() == "brand")
-                pm_product = next(c for c in PM.columns if "product" in c.lower() and "name" in c.lower())
-                pm_vendor = next(c for c in PM.columns if "vendor" in c.lower() and "sku" in c.lower())
-                # Find CP column in Purchase Master
-                pm_cp = next((c for c in PM.columns if c.lower() == "cp"), None)
-
-                if pm_cp is None:
-                    st.error("❌ CP column not found in Purchase Master")
-                    st.stop()
-
-                # Create PM mappings
-                map_manager = PM.set_index(pm_asin)[pm_manager].to_dict()
-                map_brand = PM.set_index(pm_asin)[pm_brand].to_dict()
-                map_product = PM.set_index(pm_asin)[pm_product].to_dict()
-                map_vendor = PM.set_index(pm_asin)[pm_vendor].to_dict()
-                map_cp = PM.set_index(pm_asin)[pm_cp].to_dict()
-
-                # Add PM data to pivot
-                pivot_sorted["Manager"] = pivot_sorted["Asin"].astype(str).str.strip().map(map_manager)
-                pivot_sorted["Brand"] = pivot_sorted["Asin"].astype(str).str.strip().map(map_brand)
-                pivot_sorted["Product Name"] = pivot_sorted["Asin"].astype(str).str.strip().map(map_product)
-                pivot_sorted["Vendor SKU"] = pivot_sorted["Asin"].astype(str).str.strip().map(map_vendor)
-
-                # Convert all object columns to string to avoid Arrow serialization issues
-                for col in ["Manager", "Brand", "Product Name", "Vendor SKU"]:
-                    pivot_sorted[col] = pivot_sorted[col].astype(str).replace('nan', '')
-
-                # Reorder columns
-                final_cols = ["Asin", "Manager", "Brand", "Product Name", "Vendor SKU", "Stock", "Sales QTY"]
-                pivot_final = pivot_sorted[final_cols]
-                
-                inv_pivot = pivot_Inv.copy()
-                inv_pivot = inv_pivot.reset_index()
-                inv_pivot.rename(columns={
-                    "Asin": "ASIN",
-                    "Sellable": "Current Stock"
-                }, inplace=True)
-
-                inv_pivot = inv_pivot[inv_pivot["ASIN"] != "Grand Total"]
-                
-                inv_pivot["Brand"] = inv_pivot["ASIN"].map(map_brand)
-                inv_pivot["Brand Manager"] = inv_pivot["ASIN"].map(map_manager)
-                inv_pivot["Product Name"] = inv_pivot["ASIN"].map(map_product)
-                inv_pivot["Vendor SKU"] = inv_pivot["ASIN"].map(map_vendor)
-                inv_pivot["CP"] = inv_pivot["ASIN"].map(map_cp)
-                
-                qwtt_sales_map = (
-                    qwtt_pivot
-                    .reset_index()
-                    .rename(columns={qwtt_asin_col: "ASIN", "QWTT Units": "Sales Units/Qty"})
-                )
-
-                qwtt_sales_map = qwtt_sales_map[qwtt_sales_map["ASIN"] != "Grand Total"]
-
-                sales_qty_map = dict(
-                    zip(qwtt_sales_map["ASIN"].astype(str), qwtt_sales_map["Sales Units/Qty"])
-                )
-
-                inv_pivot["Sales Units/Qty"] = (
-                    inv_pivot["ASIN"].astype(str)
-                    .map(sales_qty_map)
-                    .fillna(0)
-                    .astype(int)
-                )
-                
-                inv_pivot["CP"] = pd.to_numeric(inv_pivot["CP"], errors="coerce").fillna(0)
-                inv_pivot["As per Qty CP"] = inv_pivot["CP"] * inv_pivot["Current Stock"]
-                
-                # ==============================
-                # QWTT SALES REPORT (NEW REPORT)
-                # ==============================
-
-                qwtt_sales_report = inv_pivot[
-                    [
-                        "ASIN",
-                        "Brand",
-                        "Brand Manager",
-                        "Product Name",
-                        "Vendor SKU",
-                        "Current Stock",
-                        "Sales Units/Qty",
-                        "CP",
-                        "As per Qty CP"
-                    ]
-                ]
-                
-                # =========================
-                # ADD GRAND TOTAL ROW
-                # =========================
-
-                total_stock = qwtt_sales_report["Current Stock"].sum()
-                total_cp_value = qwtt_sales_report["As per Qty CP"].sum()
-
-                weighted_cp = (
-                    total_cp_value / total_stock if total_stock > 0 else 0
-                )
-
-                grand_total_row = {
-                    "ASIN": "Grand Total",
-                    "Brand": "",
-                    "Brand Manager": "",
-                    "Product Name": "",
-                    "Vendor SKU": "",
-                    "Current Stock": total_stock,
-                    "Sales Units/Qty": qwtt_sales_report["Sales Units/Qty"].sum(),
-                    "CP": round(weighted_cp, 2),
-                    "As per Qty CP": total_cp_value,
-                }
-
-                qwtt_sales_report = pd.concat(
-                    [qwtt_sales_report, pd.DataFrame([grand_total_row])],
-                    ignore_index=True
-                )
-
-                # Store in session state
-                st.session_state['result'] = pivot_final
-                
-                st.session_state["qwtt_sales_report"] = qwtt_sales_report
-
-                st.success("✅ Report generated successfully!")
-
-        except Exception as e:
-            st.error(f"❌ Error processing files: {str(e)}")
-            st.exception(e)
-
-# Display results if available
-if 'result' in st.session_state:
-    st.markdown("---")
-
-    tab1, tab2 = st.tabs(
-        ["📦 Inventory / Stock Report", "📊 QWTT Sales Report"]
+    
+    # Create lookup dictionaries from PM
+    vendor_sku_lookup = pm_df.set_index("ASIN")["Vendor SKU Codes"].to_dict()
+    brand_lookup = pm_df.set_index("ASIN")["Brand"].to_dict()
+    manager_lookup = pm_df.set_index("ASIN")["Brand Manager"].to_dict()
+    product_lookup = pm_df.set_index("ASIN")["Product Name"].to_dict()
+    cp_lookup = pm_df.set_index("ASIN")["CP"].to_dict()
+    
+    # Map data to inventory pivot
+    inv_pivot["Vendor SKU Codes"] = inv_pivot["Asin"].map(vendor_sku_lookup)
+    inv_pivot["Brand"] = inv_pivot["Asin"].map(brand_lookup)
+    inv_pivot["Brand Manager"] = inv_pivot["Asin"].map(manager_lookup)
+    inv_pivot["Product Name"] = inv_pivot["Asin"].map(product_lookup)
+    inv_pivot["CP"] = inv_pivot["Asin"].map(cp_lookup)
+    
+    # Convert CP to numeric and round to 2 decimal places
+    inv_pivot["CP"] = pd.to_numeric(inv_pivot["CP"], errors='coerce').round(2)
+    
+    # Reorder columns for inventory
+    inv_pivot = inv_pivot[["Asin", "Vendor SKU Codes", "Brand", "Brand Manager", 
+                           "Product Name", "Stock", "CP"]]
+    
+    # Process Sales Data
+    sales_df_clean = sales_df[
+        ~sales_df["Status"].fillna("").str.lower().isin(["cancelled", "sidelined"])
+    ]
+    sales_df_clean = sales_df_clean[sales_df_clean["Order Value"] != 0]
+    
+    sales_inv_pivot = (
+        sales_df_clean
+        .groupby("ASIN", as_index=False)["Units"]
+        .sum()
+        .rename(columns={"Units": "Sales Qty"})
     )
+    
+    # Add Sales Qty to inventory report
+    sales_qty_lookup = sales_inv_pivot.set_index("ASIN")["Sales Qty"].to_dict()
+    inv_pivot["Sales Qty"] = inv_pivot["Asin"].map(sales_qty_lookup).fillna(0)
+    inv_pivot["As Per Qty CP"] = (inv_pivot["CP"] * inv_pivot["Sales Qty"]).round(2)
+    
+    # Create Sales Report
+    sales_report = sales_inv_pivot.copy()
+    sales_report["Vendor SKU Codes"] = sales_report["ASIN"].map(vendor_sku_lookup)
+    sales_report["Brand"] = sales_report["ASIN"].map(brand_lookup)
+    sales_report["Brand Manager"] = sales_report["ASIN"].map(manager_lookup)
+    sales_report["Product Name"] = sales_report["ASIN"].map(product_lookup)
+    sales_report["CP"] = pd.to_numeric(sales_report["ASIN"].map(cp_lookup), errors='coerce').round(2)
+    
+    # Add Stock to sales report
+    sales_stock_lookup = inv_pivot.set_index("Asin")["Stock"].to_dict()
+    sales_report["Stock"] = sales_report["ASIN"].map(sales_stock_lookup)
+    sales_report["As Per Qty CP"] = (sales_report["CP"] * sales_report["Sales Qty"]).round(2)
+    
+    # Reorder columns for sales report
+    sales_report = sales_report[["ASIN", "Vendor SKU Codes", "Brand", "Brand Manager",
+                                 "Product Name", "Sales Qty", "CP", "Stock", "As Per Qty CP"]]
+    
+    return inv_pivot, sales_report
 
-    # =========================
-    # TAB 1: INVENTORY REPORT
-    # =========================
-    with tab1:
-        st.subheader("📦 Inventory / Stock Report")
+def add_grand_total(df):
+    """Add grand total row to dataframe"""
+    df_copy = df.copy()
+    
+    # Create grand total row
+    total_row = {}
+    for col in df_copy.columns:
+        if df_copy[col].dtype in ['int64', 'float64']:
+            total_value = df_copy[col].sum()
+            # Round CP and As Per Qty CP columns to 2 decimal places
+            if col in ['CP', 'As Per Qty CP']:
+                total_row[col] = round(total_value, 2)
+            else:
+                total_row[col] = total_value
+        else:
+            total_row[col] = 'GRAND TOTAL' if col == df_copy.columns[0] else ''
+    
+    # Add total row
+    total_df = pd.DataFrame([total_row])
+    df_with_total = pd.concat([df_copy, total_df], ignore_index=True)
+    
+    return df_with_total
 
-        result = st.session_state['result']
+def to_excel(df, sheet_name):
+    """Convert dataframe to Excel bytes"""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, sheet_name=sheet_name, index=False)
+    return output.getvalue()
 
-        col1, col2, col3, col4 = st.columns(4)
+# Generate button
+generate_button = st.sidebar.button("🚀 Generate Reports", type="primary", use_container_width=True)
 
-        product_count = (
-            len(result) - 1 if "Grand Total" in result['Asin'].values else len(result)
-        )
-        total_stock = result[result['Asin'] != 'Grand Total']['Stock'].sum()
-        total_sales = result[result['Asin'] != 'Grand Total']['Sales QTY'].sum()
-
-        with col1:
-            st.metric("Total Products", f"{product_count:,}")
-        with col2:
-            st.metric("Total Stock", f"{total_stock:,}")
-        with col3:
-            st.metric("Total Sales QTY", f"{total_sales:,}")
-        with col4:
-            sell_through = (total_sales / total_stock * 100) if total_stock > 0 else 0
-            st.metric("Sell-through Rate", f"{sell_through:.1f}%")
-
-        st.dataframe(
-            result,
-            use_container_width=True,
-            height=500,
-            column_config={
-                "Asin": st.column_config.TextColumn("ASIN", width="small"),
-                "Manager": st.column_config.TextColumn("Manager", width="small"),
-                "Brand": st.column_config.TextColumn("Brand", width="small"),
-                "Product Name": st.column_config.TextColumn("Product Name", width="large"),
-                "Vendor SKU": st.column_config.TextColumn("Vendor SKU", width="small"),
-                "Stock": st.column_config.NumberColumn("Stock", format="%d"),
-                "Sales QTY": st.column_config.NumberColumn("Sales QTY", format="%d"),
-            },
-        )
-
-        # Create Excel in memory
-        output1 = io.BytesIO()
-        with pd.ExcelWriter(output1, engine='openpyxl') as writer:
-            result.to_excel(writer, index=False, sheet_name="Stock Report")
-        output1.seek(0)
-
-        # Download button for Excel
-        st.download_button(
-            label="📥 Download Inventory / Stock Report (Excel)",
-            data=output1,
-            file_name="inventory_stock_report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            use_container_width=True,
-        )
-
-        # csv1 = result.to_csv(index=False).encode("utf-8")
-        # st.download_button(
-        #     label="📥 Download Inventory / Stock Report",
-        #     data=csv1,
-        #     file_name="inventory_stock_report.csv",
-        #     mime="text/csv",
-        #     type="primary",
-        #     use_container_width=True,
-        # )
-
-    # =========================
-    # TAB 2: QWTT SALES REPORT
-    # =========================
-    with tab2:
-        st.subheader("📊 QWTT Sales Report")
-
-        qwtt_sales_report = st.session_state["qwtt_sales_report"]
-
-        st.dataframe(
-            qwtt_sales_report,
-            use_container_width=True,
-            height=500,
-        )
+# Main app logic
+if inventory_file and pm_file and sales_file and generate_button:
+    try:
+        with st.spinner("Processing files..."):
+            # Read files
+            inventory_df = pd.read_csv(inventory_file)
+            pm_df = pd.read_excel(pm_file)
+            sales_df = pd.read_csv(sales_file)
         
-        # Create Excel in memory
-        output2 = io.BytesIO()
-        with pd.ExcelWriter(output2, engine='openpyxl') as writer:
-            qwtt_sales_report.to_excel(writer, index=False, sheet_name="QWTT Sales")
-        output2.seek(0)
+        # Process data
+        with st.spinner("Generating reports..."):
+            inv_report, sales_report = process_data(inventory_df, pm_df, sales_df)
+        
+        st.success("✅ Reports generated successfully!")
+        
+        # Create tabs
+        tab1, tab2 = st.tabs(["📦 QWTT Inventory Report", "💰 QWTT Sales Report"])
+        
+        with tab1:
+            st.subheader("QWTT Inventory Report")
+            
+            # Display metrics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total ASINs", len(inv_report))
+            with col2:
+                st.metric("Total Stock", int(inv_report["Stock"].sum()))
+            with col3:
+                st.metric("Total Sales Qty", int(inv_report["Sales Qty"].sum()))
+            with col4:
+                st.metric("Total CP Value", f"₹{inv_report['As Per Qty CP'].sum():,.2f}")
+            
+            st.divider()
+            
+            # Add grand total to display
+            inv_report_with_total = add_grand_total(inv_report)
+            
+            # Display dataframe
+            st.dataframe(inv_report_with_total, use_container_width=True, height=500)
+            
+            # Download button (with grand total)
+            excel_data = to_excel(inv_report_with_total, "Inventory Report")
+            st.download_button(
+                label="📥 Download Inventory Report (Excel)",
+                data=excel_data,
+                file_name="QWTT_Inventory_Report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        
+        with tab2:
+            st.subheader("QWTT Sales Report")
+            
+            # Display metrics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Products Sold", len(sales_report))
+            with col2:
+                st.metric("Total Units Sold", int(sales_report["Sales Qty"].sum()))
+            with col3:
+                st.metric("Total Sales Value", f"₹{sales_report['As Per Qty CP'].sum():,.2f}")
+            with col4:
+                avg_cp = sales_report['As Per Qty CP'].sum() / sales_report['Sales Qty'].sum()
+                st.metric("Avg CP per Unit", f"₹{avg_cp:,.2f}")
+            
+            st.divider()
+            
+            # Add grand total to display
+            sales_report_with_total = add_grand_total(sales_report)
+            
+            # Display dataframe
+            st.dataframe(sales_report_with_total, use_container_width=True, height=500)
+            
+            # Download button (with grand total)
+            excel_data = to_excel(sales_report_with_total, "Sales Report")
+            st.download_button(
+                label="📥 Download Sales Report (Excel)",
+                data=excel_data,
+                file_name="QWTT_Sales_Report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
+    except Exception as e:
+        st.error(f"❌ Error processing files: {str(e)}")
+        st.info("Please ensure all files are uploaded in the correct format.")
+elif inventory_file and pm_file and sales_file and not generate_button:
+    st.info("✅ All files uploaded! Click the '🚀 Generate Reports' button in the sidebar to process.")
+else:
+    st.info("👈 Please upload all three required files in the sidebar to begin:")
+    st.markdown("""
+    1. **Inventory CSV** - QWTT inventory by bin file
+    2. **PM Excel** - Product master file
+    3. **Sales CSV** - QWTT customer shipments file
+    """)
+    
+    # Show sample format expectations
+    with st.expander("ℹ️ File Format Requirements"):
+        st.markdown("""
+        **Inventory CSV should contain:**
+        - Asin
+        - Sellable
+        - Other inventory columns
+        
+        **PM Excel should contain:**
+        - ASIN
+        - Vendor SKU Codes
+        - Brand
+        - Brand Manager
+        - Product Name
+        - CP
+        
+        **Sales CSV should contain:**
+        - ASIN
+        - Units
+        - Status
+        - Order Value
+        """)
 
-        # Download button for Excel
-        st.download_button(
-            label="📥 Download QWTT Sales Report (Excel)",
-            data=output2,
-            file_name="qwtt_sales_report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            use_container_width=True,
-        )
-
-
-        # csv2 = qwtt_sales_report.to_csv(index=False).encode("utf-8")
-        # st.download_button(
-        #     label="📥 Download QWTT Sales Report",
-        #     data=csv2,
-        #     file_name="qwtt_sales_report.csv",
-        #     mime="text/csv",
-        #     type="primary",
-        #     use_container_width=True,
-        # )
-
-# Footer (UNCHANGED)
-st.markdown("---")
-st.markdown(
-    "💡 **Tip**: Make sure your files have the correct column names: "
-    "`Asin`, `Sellable` in Inventory, and matching ASIN columns in all files."
-)
-
+# Footer
+st.divider()
+st.caption("QWTT Inventory & Sales Report Generator | Built with Streamlit")
