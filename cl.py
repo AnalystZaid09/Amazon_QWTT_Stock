@@ -60,7 +60,9 @@ def process_data(inventory_df, pm_df, sales_df):
     # Add Sales Qty to inventory report
     sales_qty_lookup = sales_inv_pivot.set_index("ASIN")["Sales Qty"].to_dict()
     inv_pivot["Sales Qty"] = inv_pivot["Asin"].map(sales_qty_lookup).fillna(0)
-    inv_pivot["As Per Qty CP"] = (inv_pivot["CP"] * inv_pivot["Stock"]).round(2)
+    inv_pivot["CP as Per Stock"] = (inv_pivot["CP"] * inv_pivot["Stock"]).round(2)
+    inv_pivot["CP as Per Sales Qty"] = (inv_pivot["CP"] * inv_pivot["Sales Qty"]).round(2)
+
     
     # Create Sales Report
     sales_report = sales_inv_pivot.copy()
@@ -234,4 +236,5 @@ else:
 # Footer
 st.divider()
 st.caption("QWTT Inventory & Sales Report Generator | Built with Streamlit")
+
 
