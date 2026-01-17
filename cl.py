@@ -79,7 +79,7 @@ def process_data(inventory_df, pm_df, sales_df):
     
     # Reorder columns for sales report
     sales_report = sales_report[["ASIN", "Vendor SKU Codes", "Brand", "Brand Manager",
-                                 "Product Name", "Sales Qty", "CP", "Stock", "CP as Per Sales Qty","CP as Per Stock"]]
+                                 "Product Name", "Sales Qty", "CP", "Stock", "CP as Per Sales Qty"]]
     
     return inv_pivot, sales_report
 
@@ -236,6 +236,7 @@ else:
 # Footer
 st.divider()
 st.caption("QWTT Inventory & Sales Report Generator | Built with Streamlit")
+
 
 
 
